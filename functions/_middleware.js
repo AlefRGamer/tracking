@@ -75,8 +75,25 @@ export async function onRequest(context) {
   const referrer = request.headers.get('referer') || '';
   const now = Math.floor(Date.now() / 1000);
 
+  // --- Meta Pixel ID resolved from env, digits only ---
+  // Sanitised because the value is injected into a <script> body below, where
+  // HTMLRewriter would HTML-escape quotes and break the JS.
+  const pixelId = String(env.META_PIXEL_ID || '').replace(/[^0-9]/g, '');
+
   // --- Serve the page FIRST, then write to D1 in background ---
-  const response = await next();
+  // When the HTML is going to be rewritten, strip the conditional headers so
+  // the asset server cannot answer 304. A 304 has no body, so there would be
+  // nothing to inject into and the browser would keep replaying a cached page
+  // carrying the PREVIOUS pixel id — silently defeating the point of driving
+  // the pixel from an env var.
+  let downstreamRequest = request;
+  if (pixelId) {
+    const h = new Headers(request.headers);
+    h.delete('If-None-Match');
+    h.delete('If-Modified-Since');
+    downstreamRequest = new Request(request, { headers: h });
+  }
+  const response = await next(downstreamRequest);
 
   // --- Set HTTP cookies ---
   const maxAge = 34560000; // 400 days
@@ -91,11 +108,42 @@ export async function onRequest(context) {
     newHeaders.append('Set-Cookie', `_fbc=${fbc}; ${cookieBase}`);
   }
 
-  const newResponse = new Response(response.body, {
+  let newResponse = new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
     headers: newHeaders,
   });
+
+  // --- Inject the Meta Pixel ID at the edge ---
+  // Pages ship a hardcoded fallback id so `wrangler pages dev` and any plain
+  // file preview still fire the pixel. In production this rewrite makes
+  // META_PIXEL_ID the single source of truth for BOTH the browser pixel and
+  // the Conversions API, so swapping pixels is an env-var change rather than
+  // an edit to every page. See docs/page-types/lead-form-page.md for the two
+  // markers a page has to carry.
+  if (pixelId && (newResponse.headers.get('content-type') || '').includes('text/html')) {
+    // The document must be revalidated on every view, otherwise a browser that
+    // cached it before the env var changed keeps firing the old pixel.
+    newHeaders.set('Cache-Control', 'no-cache');
+    newResponse = new Response(newResponse.body, {
+      status: newResponse.status,
+      statusText: newResponse.statusText,
+      headers: newHeaders,
+    });
+    newResponse = new HTMLRewriter()
+      .on('script#pixel-config', {
+        element(el) { el.setInnerContent(`window.__PIXEL_ID='${pixelId}';`); },
+      })
+      .on('noscript#pixel-noscript', {
+        element(el) {
+          el.setInnerContent(
+            `<img height="1" width="1" style="display:none" src="https://www.facebook.com/tr?id=${pixelId}&ev=PageView&noscript=1" alt="">`,
+            { html: true }
+          );
+        },
+      })
+      .transform(newResponse);
+  }
 
   // --- D1 UPSERT (background, non-blocking) ---
   context.waitUntil(

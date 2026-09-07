@@ -52,6 +52,7 @@
     gtag('config', 'G-XXXXXXXXXX'); // ← your GA4 measurement ID
   </script>
 
+  <script id="pixel-config">window.__PIXEL_ID = 'YOUR_META_PIXEL_ID';</script>
   <!-- Meta Pixel -->
   <script>
     !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
@@ -59,7 +60,11 @@
     n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
     t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,
     document,'script','https://connect.facebook.net/en_US/fbevents.js');
-    fbq('init', 'YOUR_META_PIXEL_ID'); // ← your Meta Pixel numeric ID
+    // The id comes from `window.__PIXEL_ID`, which `_middleware.js` rewrites
+    // from META_PIXEL_ID on every HTML response. Swapping pixels is then an
+    // env-var change instead of an edit to every page. The literal below is
+    // only the fallback for `wrangler pages dev` and plain-file previews.
+    if (window.__PIXEL_ID) fbq('init', window.__PIXEL_ID);
 
     // PageView — dual fire (pixel + CAPI) with shared event_id for dedup.
     // /tracker skips event_log inserts for PageView, so D1 stays lean;
@@ -83,6 +88,8 @@
       }).catch(function () {});
     })();
   </script>
+  <noscript id="pixel-noscript"><img height="1" width="1" style="display:none"
+    src="https://www.facebook.com/tr?id=YOUR_META_PIXEL_ID&ev=PageView&noscript=1" alt=""></noscript>
 
   <style>
     *,*::before,*::after { box-sizing: border-box; }

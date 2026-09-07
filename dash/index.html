@@ -240,18 +240,70 @@
           <thead class="text-xs uppercase tracking-wider text-[color:var(--dim)] border-b border-[color:var(--border)]">
             <tr>
               <th class="text-left py-2 pr-4">When</th>
+              <th class="text-left py-2 pr-4">Name</th>
+              <th class="text-left py-2 pr-4">Phone</th>
               <th class="text-left py-2 pr-4">Email</th>
               <th class="text-left py-2 pr-4">Source</th>
               <th class="text-left py-2 pr-4">Campaign</th>
               <th class="text-left py-2 pr-4">Medium</th>
               <th class="text-center py-2 pr-4">Meta</th>
-              <th class="text-center py-2">GA4</th>
+              <th class="text-center py-2 pr-4">GA4</th>
+              <th class="text-center py-2">CRM</th>
             </tr>
           </thead>
           <tbody id="leads-tbody">
             <tr><td colspan="7" class="py-6 text-center text-[color:var(--muted)]">Loading…</td></tr>
           </tbody>
         </table>
+      </div>
+    </section>
+
+    <!-- CRM funnel -->
+    <section class="card p-5 fade-in" id="crm-section">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <div class="font-semibold">CRM funnel</div>
+          <div class="text-xs text-[color:var(--muted)]">Pipeline stage changes sent back to Meta. The drop between steps is the funnel; a red status is a problem.</div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5" id="crm-funnel"></div>
+
+      <div class="text-xs uppercase tracking-wider text-[color:var(--dim)] mb-2">Recent CRM events</div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="text-xs uppercase tracking-wider text-[color:var(--dim)] border-b border-[color:var(--border)]">
+            <tr>
+              <th class="text-left py-2 pr-4">When</th>
+              <th class="text-left py-2 pr-4">Event</th>
+              <th class="text-left py-2 pr-4">Name</th>
+              <th class="text-left py-2 pr-4">Source</th>
+              <th class="text-left py-2 pr-4">Campaign</th>
+              <th class="text-right py-2 pr-4">Value</th>
+              <th class="text-center py-2">Meta</th>
+            </tr>
+          </thead>
+          <tbody id="crm-events-tbody">
+            <tr><td colspan="7" class="py-6 text-center text-[color:var(--muted)]">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div id="crm-failures" class="mt-5 hidden">
+        <div class="text-xs uppercase tracking-wider accent-red mb-2">Webhooks that did not become an event</div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="text-xs uppercase tracking-wider text-[color:var(--dim)] border-b border-[color:var(--border)]">
+              <tr>
+                <th class="text-left py-2 pr-4">When</th>
+                <th class="text-left py-2 pr-4">Stage</th>
+                <th class="text-left py-2 pr-4">Deal</th>
+                <th class="text-left py-2">Reason</th>
+              </tr>
+            </thead>
+            <tbody id="crm-failures-tbody"></tbody>
+          </table>
+        </div>
       </div>
     </section>
 
@@ -501,18 +553,21 @@
     qs('#kpi-leads').textContent = fmtInt((data.leads || []).length);
     const tbody = qs('#leads-tbody');
     if (!data.leads || data.leads.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="py-6 text-center text-[color:var(--muted)]">No leads in this window.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10" class="py-6 text-center text-[color:var(--muted)]">No leads in this window.</td></tr>';
       return;
     }
     tbody.innerHTML = data.leads.map((l, i) => `
       <tr class="row-hover border-b border-[color:var(--border)] cursor-pointer" data-idx="${i}">
         <td class="py-2 pr-4 text-[color:var(--dim)]">${fmtDate(l.timestamp)}</td>
+        <td class="py-2 pr-4">${escapeHtml(l.raw_name || '—')}</td>
+        <td class="py-2 pr-4 mono">${escapeHtml(l.raw_phone || '—')}</td>
         <td class="py-2 pr-4 mono">${escapeHtml(l.raw_email || '—')}</td>
         <td class="py-2 pr-4">${escapeHtml(l.utm_source || '(direct)')}</td>
         <td class="py-2 pr-4 text-[color:var(--dim)]">${escapeHtml(l.utm_campaign || '—')}</td>
         <td class="py-2 pr-4 text-[color:var(--dim)]">${escapeHtml(l.utm_medium || '—')}</td>
         <td class="py-2 pr-4 text-center">${l.meta_response_ok ? '<span class="accent-green">✓</span>' : '<span class="accent-red">✕</span>'}</td>
-        <td class="py-2 text-center">${l.ga4_response_ok ? '<span class="accent-green">✓</span>' : '<span class="accent-red">✕</span>'}</td>
+        <td class="py-2 pr-4 text-center">${l.ga4_response_ok ? '<span class="accent-green">✓</span>' : '<span class="accent-red">✕</span>'}</td>
+        <td class="py-2 text-center">${l.crm_status_code == null ? '<span class="text-[color:var(--dim)]">–</span>' : (l.crm_ok ? '<span class="accent-green">✓</span>' : '<span class="accent-red">✕</span>')}</td>
       </tr>
     `).join('');
     qsa('#leads-tbody tr[data-idx]').forEach(row => {
@@ -520,6 +575,74 @@
         openDetails('lead', data.leads[parseInt(row.getAttribute('data-idx'), 10)]);
       });
     });
+  }
+
+  async function loadCrmEvents(days) {
+    const data = await fetchJson(`/api/crm-events?days=${days}`);
+
+    // A deployment with no CRM configured has nothing to show here, and an
+    // empty funnel of zeroes reads like something is broken. Hide the whole
+    // section instead.
+    const section = qs('#crm-section');
+    const total = (data.funnel || []).reduce((n, f) => n + Number(f.total || 0), 0);
+    if (!total && !(data.events || []).length && !(data.failures || []).length) {
+      section.classList.add('hidden');
+      return;
+    }
+    section.classList.remove('hidden');
+
+    // Read left to right: each step shows how many reached it and what share
+    // that is of the step before. The drop between steps is where the money
+    // is stalling.
+    const accents = ['accent-green', 'accent-blue', 'accent-blue', 'accent-amber'];
+    qs('#crm-funnel').innerHTML = (data.funnel || []).map((f, i, arr) => {
+      const previous = i > 0 ? arr[i - 1].total : 0;
+      const sub = i === 0
+        ? 'entered the funnel'
+        : (previous > 0 ? Math.round((f.total / previous) * 100) + '% of previous step' : 'no previous step');
+      const rejected = f.total - f.accepted;
+      return `
+        <div class="card p-4">
+          <div class="kpi-label">${escapeHtml(f.event)}</div>
+          <div class="kpi-value mono ${accents[i % accents.length]} mt-1">${fmtInt(f.total)}</div>
+          <div class="text-xs text-[color:var(--muted)] mt-1">${escapeHtml(sub)}</div>
+          ${rejected > 0 ? `<div class="text-xs accent-red mt-1">${fmtInt(rejected)} rejected by Meta</div>` : ''}
+        </div>`;
+    }).join('');
+
+    const tbody = qs('#crm-events-tbody');
+    if (!data.events || data.events.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="py-6 text-center text-[color:var(--muted)]">No CRM events in this window.</td></tr>';
+    } else {
+      tbody.innerHTML = data.events.map(e => `
+        <tr class="border-b border-[color:var(--border)]" title="${escapeHtml(e.meta_response_body)}">
+          <td class="py-2 pr-4 text-[color:var(--dim)]">${fmtDate(e.timestamp)}</td>
+          <td class="py-2 pr-4 mono">${escapeHtml(e.event_name)}</td>
+          <td class="py-2 pr-4">${escapeHtml(e.name || '—')}</td>
+          <td class="py-2 pr-4">${escapeHtml(e.utm_source || '(direct)')}</td>
+          <td class="py-2 pr-4 text-[color:var(--dim)]">${escapeHtml(e.utm_campaign || '—')}</td>
+          <td class="py-2 pr-4 text-right mono">${e.value ? money(e.value) : '—'}</td>
+          <td class="py-2 text-center">${e.meta_response_ok ? '<span class="accent-green">✓</span>' : `<span class="accent-red">✕ ${e.meta_status_code || ''}</span>`}</td>
+        </tr>
+      `).join('');
+    }
+
+    // The failures table appears only when there are failures. A permanently
+    // empty table becomes furniture and stops being read.
+    const box = qs('#crm-failures');
+    if (data.failures && data.failures.length) {
+      box.classList.remove('hidden');
+      qs('#crm-failures-tbody').innerHTML = data.failures.map(f => `
+        <tr class="border-b border-[color:var(--border)]">
+          <td class="py-2 pr-4 text-[color:var(--dim)]">${fmtDate(f.created_at)}</td>
+          <td class="py-2 pr-4">${escapeHtml(f.stage || '—')}</td>
+          <td class="py-2 pr-4 mono text-[color:var(--dim)]">${escapeHtml(f.deal_id || '—')}</td>
+          <td class="py-2 text-[color:var(--muted)]">${escapeHtml(f.reason)}</td>
+        </tr>
+      `).join('');
+    } else {
+      box.classList.add('hidden');
+    }
   }
 
   async function loadPurchases() {
@@ -564,7 +687,7 @@
 
     if (kind === 'lead') {
       title.textContent = 'Lead details';
-      subtitle.textContent = `${fmtDate(row.timestamp)} · ${row.raw_email || '(no email)'} · event_id ${row.event_id || '—'}`;
+      subtitle.textContent = `${fmtDate(row.timestamp)} · ${row.raw_name || '(no name)'} · ${row.raw_phone || '(no phone)'} · ${row.raw_email || '(no email)'}`;
     } else {
       title.textContent = 'Purchase details';
       subtitle.textContent = `${fmtDate(row.created_at)} · ${row.raw_email || '(no email)'} · ${money(row.value, row.currency || 'BRL')} · txn ${row.transaction_id || '—'}`;
@@ -743,6 +866,7 @@
       loadAttribution(days),
       loadUtm(),
       loadLeads(days),
+      loadCrmEvents(days),
       loadPurchases(),
       loadHealth(),
     ]);

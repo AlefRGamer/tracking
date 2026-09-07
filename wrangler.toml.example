@@ -32,6 +32,18 @@ database_id = "__REPLACE_ME_DB_ID__"
 #   GA4_API_SECRET          GA4 Measurement Protocol API secret
 #   DASH_KEY                Random string to gate the dashboard
 #
+# Optional — CRM funnel events (leave unset to skip entirely):
+#   CRM_PROVIDER            Which CRM adapter is active, e.g. "agendor".
+#                           Unset disables lead push AND the inbound webhook.
+#   CRM_STAGE_EVENTS        Pipeline stage -> Meta event map, JSON. e.g.
+#                           {"QUALIFIED":"QualifiedLead","WON":"Purchase"}
+#   CRM_FUNNEL_EVENTS       Dashboard funnel order (defaults to
+#                           ["Lead","QualifiedLead","Schedule","Purchase"])
+#   CRM_CURRENCY            Currency for Purchase events (default "BRL")
+#   <PROVIDER>_TOKEN        The CRM's API token — secret
+#   <PROVIDER>_WEBHOOK_SLUG UUID v4 gating /webhook/crm/<provider>/<slug>
+#                           See docs/crm/README.md
+#
 # Optional (leave unset to skip that integration):
 #   META_TEST_EVENT_CODE    Meta test-events code for debugging
 #   TIMEZONE_OFFSET         ISO offset like "-03:00" for Google Ads timestamps

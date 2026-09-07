@@ -14,6 +14,11 @@ and sales pages.
 - **Full attribution persistence** (UTMs, `fbp`/`fbc`, `gclid`) captured at
   the edge and threaded through to each lead and each purchase.
 - **Sales platform webhooks** for Eduzz, Hotmart, and Kiwify out of the box.
+- **CRM funnel events** (optional) — leads land in your CRM carrying their
+  attribution, and pipeline stage changes come back to Meta as conversion
+  events tied to the original visit. Meta stops optimising for form-fill
+  volume and starts optimising for people who convert. Agendor built in;
+  anything else is a guided adapter. See `docs/crm/README.md`.
 - **A built-in dashboard** showing leads and purchases with their original
   UTMs so you can see where conversions actually came from.
 - **Runs entirely in your own Cloudflare account.** No external services, no

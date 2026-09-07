@@ -24,10 +24,15 @@ to be unpacked into a blank folder and driven from Claude Code.
 2. **First-party attribution persistence** — every lead and every purchase
    stores its UTMs, `fbp`/`fbc`, `gclid`, and originating session, so the
    dashboard can show where each conversion came from.
-3. **A self-contained dashboard** at `/dash` with six sections: revenue,
+3. **A self-contained dashboard** at `/dash` with seven sections: revenue,
    product sales, paid-traffic attribution with Meta spend/CPA/ROAS, UTM
-   breakdown, recent leads with UTMs, and tracking health (ITP recovery,
-   adblock recovery, bot filters).
+   breakdown, recent leads with UTMs, the CRM funnel, and tracking health
+   (ITP recovery, adblock recovery, bot filters).
+4. **CRM funnel events** (optional) — pushes each captured lead into the
+   recipient's CRM with its attribution, and sends pipeline stage changes back
+   to Meta as conversion events tied to the original visit. This is what moves
+   optimisation from "volume of form fills" to "people who actually convert".
+   Off unless `CRM_PROVIDER` is set. See `docs/crm/README.md`.
 
 ## Triage: what to do when a recipient starts a conversation
 
@@ -41,6 +46,9 @@ If they want to **add another lead page or sales page**, invoke `add-page`.
 
 If they say **"I use [sales platform not in Eduzz/Hotmart/Kiwify]"**, invoke
 `add-sales-platform`.
+
+If they want their **leads in a CRM**, or want Meta to optimise for
+**qualified leads rather than form fills**, invoke `add-crm`.
 
 For anything else, ask a clarifying question before reaching for a skill.
 
@@ -98,6 +106,17 @@ Hop-by-hop debugging bible: `docs/data-flow.md`
   `harden-tracking` skill — adding it pre-launch was judged too high-friction
   for 1000+ non-dev recipients. A missing `<PLATFORM>_WEBHOOK_SLUG` env var
   is a deploy-blocking 500 on the endpoint, not a silent accept.
+- **Per-provider CRM adapter pattern.** Same rule as the webhook adapters:
+  `functions/crm/_core.js` never branches per provider. A CRM is one adapter
+  file under `functions/crm/<provider>.js` plus one entry in `_registry.js`.
+  The inbound route is shared — `/webhook/crm/<provider>/<slug>` dispatches by
+  URL segment, so adding a CRM adds no route.
+- **CRM attribution matches on the person, never the deal.** A second pipeline
+  frequently creates a new deal instead of moving the existing one, and then
+  the deal id matches nothing — attribution disappears at exactly the stage
+  that matters most. `crm_log.person_id` is the join key.
+- **CRM events carry `action_source: 'system_generated'`.** No browser was
+  involved; a person moved a card. Never `website`.
 - **Dashboard and sync endpoints have separate secrets.** `DASH_KEY` gates
   `/dash` and `/api/*` reads. `SYNC_SECRET` gates `/api/sync/*` writes from
   external cron. Never reuse the same value for both.
@@ -125,12 +144,18 @@ Hop-by-hop debugging bible: `docs/data-flow.md`
 | `api/events.js` | Dashboard: tracking-health stats (ITP recovery, adblock, bot filter, fbp source). |
 | `api/purchases.js` | Dashboard: purchases table with platform delivery status. |
 | `api/sync/meta-ads.js` | `POST /api/sync/meta-ads` — cron-triggered Meta Marketing API pull into `ad_spend`. Gated by `SYNC_SECRET` header. |
+| `crm/_core.js` | Provider-agnostic CRM brain: pushes leads out with their attribution, turns inbound stage changes into Meta conversion events, logs both to `crm_log`. |
+| `crm/_registry.js` | Static provider map. `CRM_PROVIDER` selects the active adapter; unset disables the CRM path entirely. |
+| `crm/agendor.js` | Agendor adapter. Upserts the person, creates the deal, parses stage-change webhooks. |
+| `webhook/crm/[provider]/[slug].js` | Shared inbound route for every CRM. Dispatches by URL segment, gated by `<PROVIDER>_WEBHOOK_SLUG`. |
+| `api/crm/subscribe.js` | Registers the CRM's webhook subscriptions using the token already held by the Worker, so nobody handles the credential to get set up. |
+| `api/crm-events.js` | Dashboard: funnel counts, recent CRM events, and webhooks that did NOT become an event. |
 
 ### Schema, config, and static (`migrations/`, `config/`, `dash/`, `examples/`)
 
 | Path | Purpose |
 |---|---|
-| `migrations/` | D1 schema, numbered 0001-0015 (0005 intentionally skipped). Applied via `wrangler d1 migrations apply`. Includes `sessions`, `checkout_sessions`, `event_log`, `purchase_log`, `purchase_items`, `ad_spend`, `sync_log`. |
+| `migrations/` | D1 schema, numbered 0001-0017 (0005 intentionally skipped). Applied via `wrangler d1 migrations apply`. Includes `sessions`, `checkout_sessions`, `event_log`, `purchase_log`, `purchase_items`, `ad_spend`, `sync_log`, `crm_log`. |
 | `config/products.js` | Per-product integration config: Encharge tag, ManyChat tag ID, Google Ads conversion action. Keyed by `platform → productId`. Tracked in git; no secrets. |
 | `dash/index.html` | Self-contained dashboard. Tailwind + Chart.js via CDN, no build step. Auth via `DASH_KEY` query param. Click any Lead or Purchase row to inspect the exact payload sent to Meta/GA4/Google Ads and the response. |
 | `examples/lead-form-page/index.html` | Lead form starter (email-only by default; add phone/name per `docs/page-types/lead-form-page.md`). Demonstrates the full pixel+CAPI dedup pattern. |
@@ -149,6 +174,7 @@ live under `.claude/skills/<name>/SKILL.md`.
 | `verify-tracking` | "is my tracking working", "check my tracking", "verify the chain" | Phase B: walks the 6-checkpoint Level 1 integrity chain (cookie → sessions row → checkout URL → webhook arrival → D1 lookup → platform receipt). |
 | `add-page` | "add a lead page", "add a sales page", "create a landing page" | Copies the matching starter from `examples/`, reads `docs/page-types/*.md`, wires routing and platform-specific snippets. |
 | `add-sales-platform` | "I use [platform not in Eduzz/Hotmart/Kiwify]" | Creates a new webhook adapter following `docs/platforms/_template.md` by copying an existing adapter as the structural reference. |
+| `add-crm` | "I use [CRM]", "send my leads to my CRM", "optimise for qualified leads" | Creates a CRM adapter from `functions/crm/agendor.js`, registers it, writes `docs/crm/<provider>.md`, and works out the stage-to-event map with the recipient. |
 
 ## Deep reference
 
@@ -163,6 +189,9 @@ live under `.claude/skills/<name>/SKILL.md`.
 | Hotmart-specific notes | `docs/platforms/hotmart.md` |
 | Kiwify-specific notes | `docs/platforms/kiwify.md` |
 | Adding a new sales platform | `docs/platforms/_template.md` |
+| CRM funnel events — concepts, which Meta events to send, why | `docs/crm/README.md` |
+| Agendor-specific notes | `docs/crm/agendor.md` |
+| Adding a new CRM | `docs/crm/_template.md` |
 | Setting up Meta Ads spend sync via external cron | `docs/ad-spend-sync.md` |
 
 ## Decisions the recipient must make
@@ -177,4 +206,6 @@ These have sensible defaults. Change them only if you know why.
 | PII retention window | Raw email/name/phone stored indefinitely | Manual: run a periodic `DELETE` via scheduled worker. Not enforced by default. |
 | Which sales platforms are active | Eduzz / Hotmart / Kiwify all built in | A platform goes live once its `<PLATFORM>_WEBHOOK_SLUG` env var is set. Recipients paste the full `/webhook/<platform>/<slug>` URL into the platform's dashboard; wrong slug = 404 |
 | Dashboard auth | Query param `?key=<DASH_KEY>` | Rotate by changing the env var; no code change |
+| CRM integration | Off. No lead push, and `/webhook/crm/*` 404s | Set `CRM_PROVIDER`, the provider's token and webhook slug, and `CRM_STAGE_EVENTS`. See `docs/crm/README.md` |
+| Meta Pixel ID in page HTML | Injected at the edge from `META_PIXEL_ID`; the literal in each page is only a local-preview fallback | Change the env var and redeploy. Pages must carry `<script id="pixel-config">` and `<noscript id="pixel-noscript">` for the rewrite to find them |
 | Ad-spend sync | Off until recipient configures Meta Ads cron (see `docs/ad-spend-sync.md`) | Set `META_ADS_ACCESS_TOKEN`, `META_ADS_ACCOUNT_ID`, `SYNC_SECRET` and schedule an external cron to hit `/api/sync/meta-ads` hourly |
